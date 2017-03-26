@@ -276,7 +276,8 @@ rm -f "$bkLoc/$bkfile" &>/dev/null
 tsdate=$(date "+%Y-%m-%d %H:%M:%S")
 
 # Perform the backup, copying files to $bkLoc/$bkfile
-cmd="tar -czvvf"
+# Enable SELinux and extended attributes support
+cmd="tar --selinux --xattrs -czpvvf"
 idxopt="--index-file=$bkLoc/$idxfile"
 cmpopt="--use-compress-program=pbzip2"
 if [ $bkuptype = full ]; then
