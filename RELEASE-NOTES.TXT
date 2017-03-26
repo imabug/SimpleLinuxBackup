@@ -1,0 +1,85 @@
+Release Notes for Simple Linux Backup
+-------------------------------------
+
+0.3.3
+=====
+Development release for the 0.4 public release. Note that this release may be unstable,
+as it is still in development.
+
+Changes:
+- Simple Linux Backup now tracks when the last full backup was performed for each backup
+  set, and performs a full backup whenever the previous one occurred more than 7 days
+  ago.
+- A new x86 64-bit version is available.
+- Fixed a problem in the Simple Backup Configuration Program (SBCP) startup script,
+  simplebackupconfig. The script sometimes did not correctly determine the real
+  directory in which it was running, causing failures in starting SBCP.
+
+0.3.2
+=====
+Development release for the 0.4 public release. Note that this release may be unstable,
+as it is still in development.
+
+Changes:
+- Running Simple Backup Configuration Program now tests for the correct version of
+  Java. If the reported Java version is less than 1.5, the user sees an error message
+  and SBCP doesn't run.
+- The latest versions of Eclipse SWT are now included.
+- Minor changes were made to clarify certain text in a few dialog boxes.
+- Note that the Turkish translation has NOT been updated. As a result, the above dialog box
+  message clarifications do not appear in the Turkish version, and a couple of messages
+  show up in English rather than Turkish.
+- Internationalization support has been enhanced -- the standard wizard page buttons Back,
+  Next, Finish and Cancel now appear in the user's selected language. Note that currently
+  supported languages are English, French and Turkish.
+
+0.3.1
+=====
+Development release for the 0.4 public release. Note that this release may be unstable,
+as it is still in development.
+
+Changes:
+- Backup and Exclude lists are now kept in sorted order on the Files to Backup dialog.
+- Fix to incremental backups on mounted filesystems such as SMB (Windows shares) and
+  NFS. Incremental backups now use tar's "--newer" option along with a timestamp
+  file, rather than using tar's "--listed-incremental" option, which didn't work with
+  mounted filesystems.
+- Backups now produce an "index file", using tar's "--index-file" option. This is
+  in preparation for introduction of a program to help users restore files from
+  a backup.
+
+0.3.0
+=====
+Development release for the 0.4 public release. Note that this release may be unstable,
+as it is still in development.
+
+Changes:
+- A new button on the Advanced Options Page schedules the backup for the user, by asking
+  for a backup time and adding an entry to the appropriate user's crontab. If the "cron"
+  daemon is running, this will cause the backup script to run at the user-selected time.
+- Internationalization: Moved all displayed strings to external property files that can be
+  translated into other languages.
+- Advanced Options page now lists the exact command to be added to the crontab to execute
+  the backup script. It now takes into account the directory where simplelinuxbkup is
+  installed.
+- New About dialog also lists contributors to the project.
+- Use Java properties for home directory, path separator.
+
+0.2.0a2
+=======
+Bug-fix release for alpha 0.2.0a
+
+Sf.net
+Tracker Id	Description
+----------	-----------
+1524672		Full backups not performed in some non-English languages
+		[http://sourceforge.net/support/tracker.php?aid=1524672]
+
+1526132     Fix version string in About dialog
+        [http://sourceforge.net/tracker/index.php?func=detail&aid=1526132&group_id=170555&atid=854627]
+
+
+
+0.2.0a
+======
+Initial alpha release of Simple Linux Backup software.

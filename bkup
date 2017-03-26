@@ -1,0 +1,352 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+# bkup, a simple data backup program
+# Copyright (c) 2006-2007 by Steven J. Rosen
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see http://www.gnu.org/licenses/gpl.html
+# or write to the Free Software Foundation, Inc., 51 Franklin Street,
+# Fifth Floor, Boston, MA  02110-1301, USA.
+#------------------------------------------------------------------------------
+#
+# This script performs a full or incremental backup of important files to
+# a writeable drive.  It is meant to be run automatically from a "cron"
+# job, although it can also be used manually from a command line.  On a
+# Monday or when the last full backup is over a week old, the script performs
+# a full backup; every other day of the week, it performs an incremental backup,
+# that is, it backs up only those files that have changed since the previous backup.
+#
+# This script is appropriate for backing up to writeable
+# drives only.  Examples of writeable drives: External hard disks,
+# hard drives accessible across a network, floppy disks, Zip disks.
+# Examples of non-writeable drives: CD-R/RW, DVD-R/RW.  These are
+# not writeable using standard commands such as "cp".
+#
+# In addition, the backup drive must be either mounted in read-write mode
+# prior to running this script or must be listed in /etc/fstab with read-write
+# access specified (and thus able to be mounted with a simple
+# "mount <location>" command); use the "rw" option in fstab (for most
+# types of file systems) to allow mounting the drive in read-write mode.
+# See "man mount" for details.
+#
+# If this script is run by a non-root user, the backup drive must also be
+# mountable by an ordinary user.  Use the "user" or "users" option (for
+# most file systems) in /etc/fstab to allow non-root users to mount the drive.
+# See "man mount" for details.
+#
+# Script syntax:
+#
+#   bkup [ config-dir [ dir ] ]
+#
+# where
+#   config-dir is the full-path directory containing the configuration files. The
+#       main configuration file's name must be "bkup_config". This is an OPTIONAL
+#       parameter; if it is NOT specified or does not exist, it defaults to
+#       $HOME/.simplebackup (the directory ".simplebackup" in the user's
+#       home directory).
+#
+#   dir is the root (starting) directory for the backup.  This is an OPTIONAL
+#       parameter; if it is NOT specified, the starting directory defaults to
+#       the file system root ("/"). If the specified directory does not exist,
+#       the starting directory also defaults to "/".
+#
+#------------------------------------------------------------------------------
+
+# If no config file parameter was passed to the script, or if the parameter
+# indicates a file that doesn't exist, use the default
+if [ -z "$1" -o ! -e "$1" ]; then
+    configdir="$HOME/.simplebackup"
+else
+    configdir="$1"
+fi
+
+# Set local variables to default values in case configuration files
+# don't exist
+bkLoc="/tmp"           # Directory for temporary backup file
+logLoc="$HOME"         # Directory for log files and timestamp file
+finalLoc="$HOME"       # Mount point for final backup location
+mustBeMounted="false"  # True if finalLoc must be mounted
+cpbkuploc="$finalLoc"  # Directory to where backup file is copied
+silent="0"             # Set to "1" to prevent output to stdout
+useronly="true"        # Set to "true" so only selected user can run bkup script
+bkupuser="root"        # Set to the root user, so only root can run bkup script
+userbcklistfile="$configdir/Backupfiles.txt" # Set to full path name of backup list file
+userexclistfile="$configdir/Excludefiles.txt" # Set to full path name of exclude list file
+
+# Read the current backup configuration values from bkup_config into the
+# following local variables:
+#
+#   bkLoc           - Directory for temporary backup file
+#   logLoc          - Directory for log files and timestamp file
+#   finalLoc        - Mount point for final backup location
+#   mustBeMounted   - True if finalLoc must be mounted
+#   cpbkuploc       - Directory to where backup file is copied
+#   silent          - Set to "1" to prevent output to stdout
+#   useronly        - Set to "true" so only selected user can run bkup script
+#   bkupuser        - The user name of the selected backup user
+#   userbcklistfile - Set to full path name of backup list file
+#   userexclistfile - Set to full path name of exclude list file
+. "$configdir/bkup_config"
+
+b_debug=0
+# Uncomment the following line to enable debugging output
+#b_debug=1
+
+# Function debug().  If debugging mode is enabled, prints the given
+# string + a "continue" message, then performs a "read" command, which allows
+# the user to continue or cancel.
+# Parameters:  $1 : String to print
+debug() {
+    if [ $b_debug = 1 ]; then
+        echo "$1"
+        echo "Press Ctrl-C to cancel or Enter to continue."
+        read
+    fi
+}
+
+if [ $b_debug = 1 ]; then
+    set -x
+    debug "Run script?"
+fi
+
+rootdir="$2"
+
+#-------------------------------------------------------
+# Initialize variables used in rest of script
+#-------------------------------------------------------
+today=`date +%F`     # Today's date
+now="${today} `date +%H%M%S`"  # Sets "now" to today's date + current time
+dayofweek=`date +%a`  # Gets the day of the week in 3-letter format
+intdayofwk=`date +%u` # Day of week as integer (1=Monday)
+bkfile=Backup.$dayofweek.tar.gz  # Name of backup file, based on day of week
+idxfile=Backup.$dayofweek.index  # Name of index file containing file list
+logfile="$logLoc/bkup-$dayofweek.log"  # Full path name of today's log file
+log_compr="$logfile.gz"  # Full path name of old, compressed log file
+timestampfile="$logLoc/timestamp"  # Indicates date/time of last backup
+fullbackuptimestamp="$logLoc/fullbackuptimestamp"  # Indicates date/time of
+                                                   #   last full backup
+version="0.3.2"
+
+# Function log().  Logs the given string to the logfile and, if $silent is false,
+# to standard output.
+# Parameters:  $1 : String to log
+log() {
+    echo "$1" >>"$logfile"
+    if [ $silent != 1 ]; then echo "$1"; fi
+    return 0
+}
+
+# Function logandexit().  Logs string $1, gzips the log file, and exits with
+# return code $2.
+# Parameters:  $1 : string to log
+#              $2 : return code to exit the script
+logandexit() {
+    log "$1"
+    gzip -f9 "$logfile" &>/dev/null
+    exit $2
+}
+
+# Function divide_roundup.  Divides first number ($1) by second ($2), rounding
+# up to the next highest integer if there's a remainder.
+# Parameters:  $1 : Dividend
+#              $2 : Divisor; cannot be zero
+divide_roundup() {
+    if [ "$2" -eq 0 ]; then
+        logandexit "Divide by zero error in divide_roundup" 1
+    fi;
+    local remainder=$(($1 % $2))
+    local intdiv=$(($1 / $2))
+    if [ $remainder -eq 0 ]; then
+        echo $intdiv
+    else
+        echo $((intdiv+1))
+    fi
+    return 0
+}
+
+
+# Erase old log file(s) and create a new, empty uncompressed
+# log file.
+rm -f "$log_compr" &>/dev/null
+rm -f "$logfile" &>/dev/null
+touch "$logfile"
+
+# Write a header for this backup to the log file
+echo "Simple Linux Backup Copyright (c) 2006-2007 Steven J. Rosen" >>"$logfile"
+rev=$(echo "$Rev: 182 $" | cut -d " " -f 2)  # Rev instructs SVN to insert revision #
+echo "Version $version-$rev" >>"$logfile"
+echo >>"$logfile"
+echo "Beginning system backup at $now" >>"$logfile"
+echo >> "$logfile"
+
+# If $useronly = true and the user running the script is not $bkupuser, print an
+# error message, encrypt the log file, and exit.
+if [ $useronly = true ]; then
+    username=`id -un`
+    if [ "$username" != "$bkupuser" ]; then
+        logandexit "User: $username. Script must be run by '$bkupuser' user. Exiting." 1
+    fi
+fi
+
+# If root backup directory was not specified on the command line or doesn't
+# exist, use "/".
+if [ -z "$rootdir" -o ! -e "$rootdir" ]; then
+    rootdir="/"
+fi
+
+# Write the root backup directory to the log and cd to that directory.
+log "Starting backup in directory '$rootdir'"
+cd "$rootdir"
+
+# If the backupfilelist parameter (the file containing filenames to back up)
+# is empty, use default
+if [ "$userbcklistfile" = "" ]; then
+    filelist="$rootdir/BackupFiles.txt"
+else
+    filelist="$rootdir/$userbcklistfile"
+fi
+
+# If the excludefilelist parameter (the file containing filenames to exclude)
+# is empty, use default
+if [ "$userexclistfile" = "" ]; then
+    exclist="$rootdir/ExcludeFiles.txt"
+else
+    exclist="$rootdir/$userexclistfile"
+fi
+
+# Set lastfullbkage to the "age" (in days, rounded up) of the last
+# full backup. This is done by computing the number of seconds between
+# "now" and the date/time of the full backup timestamp file, and then
+# dividing by number of seconds in a day (86,400) and rounding up.
+if [ -e "$fullbackuptimestamp" ]; then
+    lastfullbktime=$(date -r "$fullbackuptimestamp" +%s)
+else
+    lastfullbktime=0
+fi
+curtime=$(date +%s)
+lastfullbkage=$(divide_roundup $((curtime - lastfullbktime)) 86400)
+log "Full backup last performed about $lastfullbkage day(s) ago."
+
+# If today ($intdayofwk) is Monday (day = 1), or the timestamp file
+# doesn't exist, or the last full backup date/time is more than 7 days
+# old (represented by $lastfullbkage), then erase the timestamp file and
+# set $bkuptype such that a full backup is performed; all other days,
+# leave the timestamp file and set $bkuptype such that an incremental
+# backup is performed.
+if [ $intdayofwk = 1 -o ! -e "$timestampfile" -o $lastfullbkage -gt 7 ];
+then
+    log "Performing full backup"
+    bkuptype="full"
+    rm -f "$timestampfile"
+else
+    log "Performing incremental backup using '$timestampfile'"
+    tsinfo=$(ls -l "$timestampfile")
+    log "$tsinfo"
+    bkuptype="incr"
+fi
+
+debug "Before tar"
+
+##############################################################################
+# Copy the files to be backed up (specified in $filelist) to $bkLoc/$bkfile,
+# compressing using gzip (-z option). Update the time of $timestampfile, or
+# create it if it doesn't already exist. If this is a full backup, create/update
+# the time of $fullbackuptimestamp.
+#
+log "Copying files..."
+# First, remove old tar file if it exists
+rm -f "$bkLoc/$bkfile" &>/dev/null
+
+# Set tsdate to the current date/time. This will be used later to set the
+# modification time of the timestamp files. We use the time *before* the tar
+# command runs so that any files modified *during* the tar command will be
+# backed up on the next backup cycle. This is slightly conservative, because
+# some of those files might be backed up both on the current cycle and the
+# next cycle, but better twice than not at all.
+tsdate=$(date "+%Y-%m-%d %H:%M:%S")
+
+# Perform the backup, copying files to $bkLoc/$bkfile
+cmd="tar -czvvf"
+idxopt="--index-file=$bkLoc/$idxfile"
+if [ $bkuptype = full ]; then
+    $cmd "$bkLoc/$bkfile" -T "$filelist" -X "$exclist" "$idxopt" >>"$logfile" 2>>"$logfile"
+    rc=$?
+    # Set the date of $fullbackuptimestamp to be $tsdate, the date/time before the
+    # tar command execution.
+    touch --date="$tsdate" "$fullbackuptimestamp"
+else
+    $cmd "$bkLoc/$bkfile" -T "$filelist" -X "$exclist" --newer="$timestampfile" "$idxopt" >>"$logfile" 2>>"$logfile"
+    rc=$?
+fi
+
+# Set the date of $timestampfile to be $tsdate, the date/time before the
+# tar command execution.
+touch --date="$tsdate" "$timestampfile"
+
+log "Done collecting and compressing files; return code $rc."
+##############################################################################
+
+# If $mustBeMounted = true, try to mount backup directory $finalLoc if it's not
+# already mounted. This assumes that $finalLoc is specified in /etc/fstab.
+hadtomount=0
+if [ $mustBeMounted = true ]; then
+    debug "Before mount"
+
+    mount | grep "$finalLoc"
+    notmounted=$?
+    if [ $notmounted != 0 ]; then
+        hadtomount=1
+        # Try to mount the backup drive ($finalLoc); if unsuccessful, print an
+        # error message, compress the log, and exit the script.
+        mount "$finalLoc" -o rw >>"$logfile" 2>>"$logfile"
+        rc=$?
+        if [ $rc != 0 ]; then
+            logandexit "Error $rc mounting $finalLoc" 1
+        fi
+    fi
+fi
+
+debug "Before file copy"
+
+# Copy the backup file and the index file to the final directory, prepending
+# some backup info to the front of the index file during the copy.
+cp -f "$bkLoc/$bkfile" "$cpbkuploc" >>"$logfile" 2>>"$logfile"
+rc=$?
+if [ $rc = 0 ]; then
+    echo "bkupfile = $cpbkuploc/$bkfile" >"$cpbkuploc/$idxfile"
+    echo "bkuptype = $bkuptype" >>"$cpbkuploc/$idxfile"
+    echo "bkupdate = $now" >>"$cpbkuploc/$idxfile"
+    echo "[index]" >>"$cpbkuploc/$idxfile"
+    cat "$bkLoc/$idxfile" >>"$cpbkuploc/$idxfile"
+    rc=$?
+fi
+
+# Erase the temporary backup and index files if the copy was successful
+if [ $rc = 0 ]; then
+    debug "Before removal of temporary backup file"
+    rm -f "$bkLoc/$bkfile" "$bkLoc/$idxfile" >>"$logfile" 2>>"$logfile"
+fi
+
+# If we previously mounted the backup drive, unmount it
+if [ $hadtomount != 0 ]; then
+    debug "Before unmount"
+    umount "$finalLoc" >>"$logfile" 2>>"$logfile"
+fi
+
+echo "Done!" >>"$logfile"
+
+# Compress the log file
+gzip -f9 "$logfile" &>/dev/null
+
+if [ $silent != 1 ]; then echo "Done!"; fi
+exit 0

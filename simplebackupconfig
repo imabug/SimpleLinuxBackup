@@ -1,0 +1,126 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+# simplebackupconfig -- A script to run Simple Backup Configuration
+# Program
+# Copyright (c) 2006 by Steven J. Rosen
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see http://www.gnu.org/licenses/gpl.html
+# or write to the Free Software Foundation, Inc., 51 Franklin Street,
+# Fifth Floor, Boston, MA  02110-1301, USA.
+#------------------------------------------------------------------------------
+#
+# This script executes the Simple Backup Configuration Program (SBCP). It first
+# determines which  directory it is running from by following any symbolic 
+# links to the script. It then tests whether the user's default Java version 
+# supports SBCP, and if not, displays an error message and exits. Otherwise, the 
+# script runs SBCP.
+#
+# Command:
+#
+#       simplebackupconfig
+
+# Returns the 0-based position of the first occurrence of substring ($2) within
+# the string ($1). If substring is not present, returns -1.
+function position() {
+  local i len sublen lastchar
+
+  # Set len to length of string $1, sublen to length of string $2
+  len=${#1}
+  sublen=${#2}
+
+  # Set lastchar to position of last character in $1 that could begin the substring
+  let lastchar=len-sublen+1
+
+  for (( i=0; $i <= $lastchar; i=i+1 )); do
+    if [ "${1:$i:$sublen}" = "$2" ]; then
+      echo $i
+      return 0
+    fi
+  done
+  echo -1
+  return 1
+}
+
+# Function to determine the real filename of a file ($1) by following symbolic
+# links. It returns the real, fully-qualified name of the file given by $1.
+function follow_links() {
+    local permissions links owner group size date time fnameinfo
+
+    # Create temp file to help walk sym links
+    local tmpf=$(mktemp -p /tmp)
+
+    # Change to the directory from which this script is running, in
+    # order to get the full directory path.
+    pushd $(dirname "$1") >/dev/null
+
+    local fname="$PWD"/$(basename "$1")
+    local finalfname=""
+    while [ -z "$finalfname" ]; do
+        # Write the symbolic link info to $tmpf. This is in the
+        # format of ls -l:
+        #     permissions links owner group size date time link-name -> linked-to-name
+        # if it's a symbolic link; otherwise, the arrow "->" and the linked-to-name are
+        # not present.
+        ls -l "$fname" >"$tmpf"
+
+        read permissions links owner group size date time fnameinfo <"$tmpf"
+
+        # Set arrowpos to 0-based position of -> in $fnameinfo, or to -1 if not present
+        local arrowpos=$(position "$fnameinfo" "->")
+
+        # If arrowpos >= 0, then an arrow ("->") was found, meaning that this is
+        # a link. Set fname to the fully-qualified linked-to name. Otherwise if
+        # arrowpos < 0, then the arrow wasn't found, so this isn't a link; set
+        # finalfname to the name.
+        if [ $arrowpos -lt 0 ]; then
+            finalfname="$fnameinfo"
+        else
+            # Set fname to the linked-to name, which starts 3 characters after the
+            # position of the arrow in $fnameinfo.
+            fname=${fnameinfo:$arrowpos+3}
+            # Set fname to be fully-qualified
+            pushd $(dirname "$fname") >/dev/null
+            fname="$PWD"/$(basename "$fname")
+            popd >/dev/null
+        fi
+    done
+    # Return to the original directory
+    popd >/dev/null
+
+    # Erase the temp file
+    rm -f "$tmpf"
+
+    # Return the final filename
+    echo "$finalfname"
+}
+
+# Set bkupdir to directory where this script is running, after
+# following symbolic links. Use the built-in "readlink" program if it
+# exists, otherwise use the follow_links function.
+if rl=$(which readlink); then
+    bkupdir=$(dirname $($rl -nqf "$0"))
+else
+    bkupdir=$(dirname $(follow_links "$0"))
+fi
+
+printf "Running Simple Backup Configuration Program in directory \"$bkupdir\"\n" >&2
+
+# If user's Java version is below 1.5, display an error message
+# and exit.
+java -classpath "$bkupdir/simplebackup.jar" org.sjrnet.versiontest.VersionTest 1.5
+if [ $? -ne 0 ]; then
+    exit 1
+fi
+
+java -Djava.library.path="$bkupdir":"$bkupdir/swt" -jar "$bkupdir/simplebackup.jar" "$bkupdir"
