@@ -128,14 +128,14 @@ today=`date +%F`     # Today's date
 now="${today} `date +%H%M%S`"  # Sets "now" to today's date + current time
 dayofweek=`date +%a`  # Gets the day of the week in 3-letter format
 intdayofwk=`date +%u` # Day of week as integer (1=Monday)
-bkfile=Backup.$dayofweek.tar.gz  # Name of backup file, based on day of week
+bkfile=Backup.$dayofweek.tar.bz2  # Name of backup file, based on day of week
 idxfile=Backup.$dayofweek.index  # Name of index file containing file list
 logfile="$logLoc/bkup-$dayofweek.log"  # Full path name of today's log file
-log_compr="$logfile.gz"  # Full path name of old, compressed log file
+log_compr="$logfile.bz2"  # Full path name of old, compressed log file
 timestampfile="$logLoc/timestamp"  # Indicates date/time of last backup
 fullbackuptimestamp="$logLoc/fullbackuptimestamp"  # Indicates date/time of
                                                    #   last full backup
-version="0.3.2"
+version="0.3.4"
 
 # Function log().  Logs the given string to the logfile and, if $silent is false,
 # to standard output.
@@ -152,7 +152,7 @@ log() {
 #              $2 : return code to exit the script
 logandexit() {
     log "$1"
-    gzip -f9 "$logfile" &>/dev/null
+    pbzip2 -f9 "$logfile" &>/dev/null
     exit $2
 }
 
@@ -278,14 +278,15 @@ tsdate=$(date "+%Y-%m-%d %H:%M:%S")
 # Perform the backup, copying files to $bkLoc/$bkfile
 cmd="tar -czvvf"
 idxopt="--index-file=$bkLoc/$idxfile"
+cmpopt="--use-compress-program=pbzip2"
 if [ $bkuptype = full ]; then
-    $cmd "$bkLoc/$bkfile" -T "$filelist" -X "$exclist" "$idxopt" >>"$logfile" 2>>"$logfile"
+    $cmd "$bkLoc/$bkfile" -T "$filelist" -X "$exclist" "$idxopt" "$cmpopt" >>"$logfile" 2>>"$logfile"
     rc=$?
     # Set the date of $fullbackuptimestamp to be $tsdate, the date/time before the
     # tar command execution.
     touch --date="$tsdate" "$fullbackuptimestamp"
 else
-    $cmd "$bkLoc/$bkfile" -T "$filelist" -X "$exclist" --newer="$timestampfile" "$idxopt" >>"$logfile" 2>>"$logfile"
+    $cmd "$bkLoc/$bkfile" -T "$filelist" -X "$exclist" --newer="$timestampfile" "$idxopt" "$cmpopt" >>"$logfile" 2>>"$logfile"
     rc=$?
 fi
 
@@ -328,6 +329,7 @@ if [ $rc = 0 ]; then
     echo "bkupdate = $now" >>"$cpbkuploc/$idxfile"
     echo "[index]" >>"$cpbkuploc/$idxfile"
     cat "$bkLoc/$idxfile" >>"$cpbkuploc/$idxfile"
+    pbzip2 -f9 "$cpbkuploc/$idxfile"
     rc=$?
 fi
 
@@ -346,7 +348,7 @@ fi
 echo "Done!" >>"$logfile"
 
 # Compress the log file
-gzip -f9 "$logfile" &>/dev/null
+pbzip2 -f9 "$logfile" &>/dev/null
 
 if [ $silent != 1 ]; then echo "Done!"; fi
 exit 0
